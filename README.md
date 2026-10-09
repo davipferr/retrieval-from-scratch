@@ -97,6 +97,10 @@ The server runs on Node's built-in TypeScript support (Node ≥ 23.6), so there'
 
 - There's no MSVC linker here, so the folder is pinned to the GNU toolchain
   (`rustup override set stable-x86_64-pc-windows-gnu`), using WinLibs MinGW (installed with winget, on PATH).
+  rustup stores the override by **folder path**, not inside the repo. If you rename or move
+  the folder, or clone it somewhere else, run the command again in the new location.
+  Otherwise cargo falls back to MSVC and fails with `linker 'link.exe' not found`.
+  `rustup override list` shows which folders are pinned.
 - `ort` has no prebuilt binaries for windows-gnu, so `vector-db` uses `load-dynamic`:
   `onnxruntime.dll` is loaded at runtime from `models/onnxruntime/` (or `$ORT_DYLIB_PATH`).
 - HTTPS (crawler) uses `native-tls` (SChannel), so no C compiler or CMake is needed.
