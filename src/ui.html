@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-search</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d1d1b; --muted: #6b6b66; --line: #e4e3df;
+    --accent: #2f5bd3; --mark: #fff0a8; --chip: #efeee9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --fg: #e9e8e4; --muted: #9a9993; --line: #2c2c2a;
+      --accent: #8aa8ff; --mark: #5a4b00; --chip: #252523;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
+  form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input[type=search] { flex: 1 1 300px; font: inherit; padding: 10px 12px; border-radius: 8px;
+         border: 1px solid var(--line); background: transparent; color: inherit; }
+  input[type=search]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  label { color: var(--muted); font-size: 13px; user-select: none; }
+  .meta { color: var(--muted); font-size: 13px; margin: 20px 0 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .chip { background: var(--chip); border-radius: 6px; padding: 2px 8px; font-size: 12px;
+          font-family: ui-monospace, Consolas, monospace; }
+  .chip .d { color: var(--muted); }
+  .hit { padding: 14px 0; border-top: 1px solid var(--line); }
+  .hit a { color: var(--accent); text-decoration: none; font-size: 16px; }
+  .hit a:hover { text-decoration: underline; }
+  .url { color: var(--muted); font-size: 12px; word-break: break-all; }
+  .snip { margin-top: 4px; }
+  .score { float: right; color: var(--muted); font-size: 12px;
+           font-family: ui-monospace, Consolas, monospace; }
+  mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>mini-search</h1>
+  <p class="sub" id="stats">inverted index · BM25 · Levenshtein automaton</p>
+  <form id="f">
+    <input type="search" id="q" placeholder="Search… typos welcome" autofocus autocomplete="off">
+    <label><input type="checkbox" id="fuzzy" checked> typo tolerance</label>
+  </form>
+  <div class="meta" id="meta"></div>
+  <div class="chips" id="chips"></div>
+  <div id="results"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const isWeb = (u) => /^https?:\/\//.test(u);
+
+fetch("/api/stats").then((r) => r.json()).then((s) => {
+  $("stats").textContent =
+    `${s.docs.toLocaleString()} documents · ${s.terms.toLocaleString()} terms · BM25 · Levenshtein automaton`;
+});
+
+let seq = 0;
+async function run() {
+  const q = $("q").value.trim();
+  const mine = ++seq;
+  if (!q) { $("meta").textContent = ""; $("chips").innerHTML = ""; $("results").innerHTML = ""; return; }
+  const params = new URLSearchParams({ q, fuzzy: $("fuzzy").checked, limit: 20 });
+  const res = await fetch(`/api/search?${params}`).then((r) => r.json());
+  if (mine !== seq) return; // a newer query already went out
+
+  $("meta").textContent = `${res.total.toLocaleString()} results · ${res.took_ms.toFixed(2)} ms`;
+  $("chips").innerHTML = res.terms.map((t) => {
+    if (!t.matches.length) return `<span class="chip">${esc(t.term)} <span class="d">→ no match</span></span>`;
+    const exp = t.matches.slice(0, 5).map((m) =>
+      m.distance ? `${esc(m.term)}<span class="d">·${m.distance}</span>` : esc(m.term)).join(", ");
+    return `<span class="chip">${esc(t.term)} <span class="d">→</span> ${exp}</span>`;
+  }).join("");
+  $("results").innerHTML = res.hits.map((h) => `
+    <div class="hit">
+      <span class="score">${h.score.toFixed(2)}</span>
+      ${isWeb(h.url) ? `<a href="${esc(h.url)}" target="_blank" rel="noopener">${esc(h.title)}</a>`
+                     : `<a>${esc(h.title)}</a>`}
+      <div class="url">${esc(h.url)}</div>
+      <div class="snip">${h.snippet}</div>
+    </div>`).join("");
+}
+
+let timer;
+$("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(run, 120); });
+$("fuzzy").addEventListener("change", run);
+$("f").addEventListener("submit", (e) => { e.preventDefault(); run(); });
+</script>
+</body>
+</html>
