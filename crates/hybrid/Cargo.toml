@@ -1,0 +1,15 @@
+[package]
+name = "hybrid"
+description = "Hybrid (BM25 + vector) retrieval over your repos, served over HTTP"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+search-engine.workspace = true
+vector-db.workspace = true

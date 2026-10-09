@@ -1,62 +1,116 @@
-# mini-search
+# Search & RAG from scratch
 
-A small search engine built to learn how Google/Elasticsearch-style search works:
-crawl a site (or index your own files), build an inverted index, rank with BM25,
-and forgive typos with a Levenshtein automaton.
+Two learning projects that work together: a search engine and a vector database
+written in Rust, feeding a RAG chat app in TypeScript that answers questions
+about your own repos and notes with Claude.
 
-## Usage
-
-```sh
-# Crawl a site (stays under the start URL's directory; --whole-host to roam the site)
-cargo run --release -- crawl https://doc.rust-lang.org/book/ --out index-book
-
-# …or index your own projects and notes
-cargo run --release -- index C:\Users\me\notes C:\Users\me\projetos --out index
-
-# Search from the terminal (typo tolerance is on; --exact turns it off)
-cargo run --release -- search -i index-book "borow chekcer lifetims"
-
-# Web UI + JSON API at http://127.0.0.1:3000
-cargo run --release -- serve -i index-book
-
-# Compare the Levenshtein automaton against brute force for one word
-cargo run --release -- fuzzy -i index-book refrence
-
-cargo run --release -- stats -i index-book
+```
+React UI (rag/web) ──► Node + Claude SDK (rag/server)      RAG: retrieve → prompt → stream
+                              │ HTTP :4000
+                              ▼
+          Rust workspace
+          ├── crates/search-engine   crawler, inverted index, BM25, typo tolerance   (Project 1)
+          ├── crates/vector-db       SIMD distances, HNSW, mmap, local embeddings     (Project 2)
+          └── crates/hybrid          chunking + both engines + Reciprocal Rank Fusion, HTTP API
 ```
 
-API: `GET /api/search?q=…&limit=10&fuzzy=true`, `GET /api/fuzzy?term=…`, `GET /api/stats`.
+**Why hybrid?** Keyword search finds exact names (`FlowNodeView`, an error code)
+that embeddings blur. Embeddings find meaning ("how is the graph saved to disk?"
+→ `persist.rs`) that keywords miss. Both run on every query, and RRF merges the
+two ranked lists.
 
-## How it works
+## Quick start
 
-| Stage | File | Notes |
+```powershell
+# 1. Models (once): ONNX Runtime DLL + bge-small-en-v1.5 into models/
+powershell -ExecutionPolicy Bypass -File scripts/fetch-models.ps1
+
+# 2. Index the folders you want to ask about
+cargo run --release -p hybrid -- ingest C:\Users\me\Documents\projetos\react crates
+
+# 3. Retrieval server on :4000
+cargo run --release -p hybrid -- serve
+
+# 4. Chat app on http://localhost:5173 (in another terminal)
+cd rag; copy .env.example .env    # then set ANTHROPIC_API_KEY in .env
+npm install; npm run dev
+```
+
+Production build of the UI: `npm run build && npm start` (serves on :3001).
+
+## The crates
+
+### `search-engine`: Project 1
+Tokenizer (accent folding, Porter stemmer), delta + varint posting lists,
+mmapped inverted index, BM25, and typo tolerance via a Levenshtein automaton.
+See [crates/search-engine/README.md](crates/search-engine/README.md).
+
+### `vector-db`: Project 2, Rust half
+
+| Part | File | What to look at |
 |---|---|---|
-| Tokenizer | `src/tokenizer.rs` | split on non-alphanumerics, lowercase, fold accents (`Ação` → `acao`), drop stopwords |
-| Stemmer | `src/stemmer.rs` | Porter (1980), English: `searching`/`searches` → `search` |
-| Varint | `src/varint.rs` | LEB128: 7 bits per byte, high bit = "more follows" |
-| Posting lists | `src/postings.rs` | doc-id gaps + term freqs, all varints; ~25% of plain `u32` pairs |
-| Index | `src/index.rs` | sorted fixed-width term table → binary search directly over `mmap`ed files |
-| BM25 | `src/bm25.rs` | k1 = 1.2, b = 0.75, Lucene's non-negative idf |
-| Search | `src/search.rs` | per-query-word best expansion, blended idf for fuzzy terms, top-k selection, snippets |
-| Typos | `src/levenshtein.rs` | DP distance → DFA built from DP rows → walked against the sorted terms, skipping dead prefixes |
+| Flat storage + brute force | `vectors.rs`, `flat.rs` | contiguous `f32`s; top-k with a size-k min-heap |
+| SIMD | `distance.rs` | scalar vs `wide::f32x8` vs AVX2+FMA intrinsics, picked at runtime |
+| HNSW | `hnsw.rs` | layered graph, neighbor-selection heuristic, recall vs brute force |
+| Persistence | `persist.rs` | vectors and the CSR graph cast straight out of `mmap` |
+| Embeddings | `embed/wordpiece.rs`, `embed/onnx.rs` | hand-written BERT tokenizer; ONNX Runtime via `ort` |
 
-Index files (`index/`): `terms.idx` (header + 24-byte entries), `terms.dat` (term strings),
-`postings.dat`, `docs.dat` (stored text for snippets), `docs.json` (titles, URLs, lengths).
+```powershell
+cargo run --release -p vector-db -- bench          # SIMD speedup, HNSW recall/speed vs ef
+cargo run --release -p vector-db -- embed "free memory in Rust" "the Drop trait" "pizza"
+cargo run --release -p vector-db -- tokenize "HNSW tokenization"
+cargo run --release -p vector-db -- recall data/vectors
+```
 
-On a 329k-term dictionary (all of `~/.cargo/registry/src`), finding terms within 2 edits
-took ~3.5 ms with the automaton vs ~235 ms brute force. It visited ~10% of the terms.
+Measured on this machine (i7-13700H, 20k × 384-d):
+
+| | recall@10 | ms/query |
+|---|---|---|
+| brute force | 1.000 | 0.89 |
+| HNSW ef=64 | 0.974 | 0.09 (10×) |
+| HNSW ef=128 | 0.998 | 0.14 (7×) |
+
+Dot product over 20k vectors: scalar 3.3 ms, `wide` 1.3 ms, AVX2+FMA 0.95 ms (3.5×).
+
+### `hybrid`: the glue
+
+- `chunk.rs`: line-based chunking that splits on blank lines and Markdown headings and packs blocks to ~1,000 chars. Every chunk maps back to `path:start-end`.
+- `retriever.rs`: ingest (one id per chunk in *both* engines), search in three modes.
+- `rrf.rs`: Reciprocal Rank Fusion, `Σ 1/(60 + rank)`.
+
+```powershell
+cargo run --release -p hybrid -- compare "FlowNodeView"     # BM25 vs vector vs hybrid
+cargo run --release -p hybrid -- search "how are posting lists compressed" --mode vector
+```
+
+API: `GET /api/search?q=…&k=8&mode=hybrid|bm25|vector`, `GET /api/stats`.
+
+## `rag/`: Project 2, TypeScript half
+
+- `server/chat.ts`: the RAG loop. It gets the top-k chunks from Rust, puts them in the latest user turn as numbered `<source>` blocks, and streams Claude's answer with `@anthropic-ai/sdk`. Thinking is adaptive with summaries shown, effort is chosen in the UI, and `fallbacks: "default"` lets the API retry a refused request on another model.
+- `server/prompt.ts`: system prompt and source formatting (answers cite `[n]`).
+- `web/`: React UI with a model picker (Sonnet 5.5 / Opus 5.5), retrieval mode and effort. Clicking a citation highlights its source, and each source shows its BM25 and vector ranks, so you can see what fusion did.
+
+The server runs on Node's built-in TypeScript support (Node ≥ 23.6), so there's no build step for it.
+
+## Setup notes for this machine
+
+- There's no MSVC linker here, so the folder is pinned to the GNU toolchain
+  (`rustup override set stable-x86_64-pc-windows-gnu`), using WinLibs MinGW (installed with winget, on PATH).
+- `ort` has no prebuilt binaries for windows-gnu, so `vector-db` uses `load-dynamic`:
+  `onnxruntime.dll` is loaded at runtime from `models/onnxruntime/` (or `$ORT_DYLIB_PATH`).
+- HTTPS (crawler) uses `native-tls` (SChannel), so no C compiler or CMake is needed.
+- Kaspersky's HTTPS scanning re-signs TLS traffic with its own root certificate, which
+  Windows trusts but Node's built-in CA list doesn't (`SELF_SIGNED_CERT_IN_CHAIN`). The
+  `rag` scripts run Node with `--use-system-ca` so it uses the Windows certificate store.
+  Don't "fix" it with `NODE_TLS_REJECT_UNAUTHORIZED=0`, which turns off verification.
+- Embedding is compute-bound: about 17 chunks/s (~7,500 tokens/s) in fp32 on this CPU.
+  The int8 model (`Xenova/bge-small-en-v1.5`, `model_quantized.onnx`) would be about 2–3× faster.
 
 ## Ideas for next steps
 
-- Damerau-Levenshtein (transposition = 1 edit, as Lucene does): `distnace` → `distance`
-- Positions in posting lists → phrase queries (`"borrow checker"`)
-- Skip lists / block-max WAND to avoid scoring every matching doc
-- A Portuguese stemmer (RSLP) alongside Porter
-- An FST instead of a sorted array for the term dictionary (what Lucene/Tantivy use)
-
-## Building on this machine
-
-There is no MSVC linker installed, so this folder is pinned to the GNU toolchain
-(`rustup override set stable-x86_64-pc-windows-gnu`), with the MinGW from
-`winget install BrechtSanders.WinLibs.POSIX.MSVCRT` on PATH. HTTPS uses
-`native-tls` (SChannel on Windows), so no C compiler or CMake is needed for TLS.
+- Query rewriting for follow-up questions (currently a heuristic in `retrieval.ts`)
+- Re-ranking the fused top-20 with a cross-encoder before sending to Claude
+- Incremental ingest (re-embed only changed files; HNSW supports inserts)
+- Damerau-Levenshtein, phrase queries and an FST term dictionary in the search engine
+- Prompt caching for long conversations

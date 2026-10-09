@@ -1,9 +1,12 @@
-[package]
-name = "mini_search"
+[workspace]
+resolver = "3"
+members = ["crates/search-engine", "crates/vector-db", "crates/hybrid"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
@@ -13,3 +16,9 @@ scraper = "0.27.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+
+search-engine = { path = "crates/search-engine" }
+vector-db = { path = "crates/vector-db" }
+
+[profile.release]
+debug = "line-tables-only"

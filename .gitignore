@@ -1,2 +1,7 @@
 /target
 /index*/
+/models/
+/data/
+node_modules/
+/rag/dist/
+.env

@@ -1,0 +1,19 @@
+[package]
+name = "vector-db"
+description = "Flat + HNSW vector search with SIMD distances, mmap persistence and local ONNX embeddings"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "vecdb"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+memmap2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+search-engine.workspace = true
+wide = "1.7.1"
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-22"] }

@@ -6,10 +6,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use reqwest::Url;
 
-use mini_search::crawler::{self, CrawlConfig};
-use mini_search::index::{Index, IndexBuilder, WriteStats};
-use mini_search::search::{self, Highlight, SearchOptions};
-use mini_search::{files, server};
+use search_engine::crawler::{self, CrawlConfig};
+use search_engine::index::{Index, IndexBuilder, WriteStats};
+use search_engine::search::{self, Highlight, SearchOptions};
+use search_engine::{files, server};
 
 #[derive(Parser)]
 #[command(

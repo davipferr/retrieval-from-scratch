@@ -3,9 +3,21 @@
   "configurations": [
     {
       "name": "mini-search",
-      "runtimeExecutable": "target/release/mini_search.exe",
+      "runtimeExecutable": "target/release/mini-search.exe",
       "runtimeArgs": ["serve", "--index", "index-book", "--addr", "127.0.0.1:3000"],
       "port": 3000
+    },
+    {
+      "name": "hybrid",
+      "runtimeExecutable": "target/release/hybrid.exe",
+      "runtimeArgs": ["serve", "--addr", "127.0.0.1:4000"],
+      "port": 4000
+    },
+    {
+      "name": "rag",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "rag", "run", "dev"],
+      "port": 5173
     }
   ]
 }
